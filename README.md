@@ -9,6 +9,10 @@ A collection of reusable extensions and configuration recipes for the [Pi coding
 - **[`protected-paths.ts`](extensions/protected-paths.ts)**: Explicitly blocks access to sensitive system paths and files (such as `.env`, `.git`, `node_modules`, and system directories).
 - **[`ds4.ts`](extensions/ds4.ts)**: Provider configuration and automatic background lifecycle/watchdog management for running local models via [ds4](https://github.com/antirez/ds4). See [ds4 provider guide](docs/ds4-provider.md) for details.
 - **[`confirm-destructive.ts`](extensions/confirm-destructive.ts)**: Prompts for confirmation before clearing, switching, or forking sessions.
+- **[`permission-gate.ts`](extensions/permission-gate.ts)**: Safety layer with interactive approval for destructive terminal commands and file modifications.
+- **[`cost-protections.ts`](extensions/cost-protections.ts)**: Loop circuit breaker protecting against token/cost bleed from runaway silent tool loops.
+- **[`smart-truncation.ts`](extensions/smart-truncation.ts)**: Truncates large tool execution outputs to protect context window tokens.
+- **[`packages/sandbox/`](packages/sandbox/)**: OS-level container isolation (macOS Seatbelt, Linux Bubblewrap) using `@anthropic-ai/sandbox-runtime` with a unified tool_call mutation handler.
 
 ## Installation Methods
 
@@ -73,6 +77,40 @@ Below are specific setup instructions for each extension.
 ### 5. Confirm Destructive Actions (`confirm-destructive.ts`)
 1. Copy `extensions/confirm-destructive.ts` to your extensions directory.
 2. This extension automatically prompts you for verification before destructive actions, such as clearing the session history or switching/forking sessions. No additional configuration is required.
+
+### 6. Permission Gating (`permission-gate.ts`)
+1. Copy `extensions/permission-gate.ts` to your extensions directory.
+2. Provides a soft confirmation gate for dangerous bash commands (`sudo`, `rm -rf`, `chmod 777`) and file modification tools.
+3. Mid-session commands:
+   - `/trust-edits`: Toggles bypass confirmation for file edits while keeping destructive terminal commands gated.
+   - `/permissions`: Displays current gate status and list of monitored tools.
+
+### 7. Cost Protections & Truncation (`cost-protections.ts` and `smart-truncation.ts`)
+1. Copy both files to your extensions directory.
+2. Activate strict loop protection and context-bleed truncation by setting the following environment variable:
+   ```bash
+   export PI_STRICT_COST_PROTECTIONS=1
+   ```
+3. Customize thresholds with these environment variables:
+   - `PI_SILENT_TURN_LIMIT`: Max consecutive silent turns before pausing (default: `16`).
+   - `PI_SMART_TRUNC_MAX`: Max characters allowed in tool results before truncating (default: `15000`).
+   - `PI_SMART_TRUNC_HEAD` / `PI_SMART_TRUNC_TAIL`: Output bytes retained at start/end of results (default: `4000` / `4000`).
+
+### 8. Hard Sandbox (`packages/sandbox/`)
+1. Register the sandbox package at the end of the `packages` array in your global `~/.pi/agent/settings.json` file to guarantee it runs last in the extension lifecycle:
+   ```json
+   {
+     "packages": [
+       "/absolute/path/to/pi-agent-recipes/packages/sandbox"
+     ]
+   }
+   ```
+2. Navigate to the `packages/sandbox` directory and install dependencies:
+   ```bash
+   cd packages/sandbox && npm install
+   ```
+3. Create your safety policy file at `~/.pi/agent/sandbox.json` (see [packages/sandbox/README.md](packages/sandbox/README.md) for details).
+4. Run Pi with the `--no-sandbox` command-line flag to temporarily bypass isolation when needed.
 
 ---
 
