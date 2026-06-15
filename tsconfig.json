@@ -10,5 +10,5 @@
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true
   },
-  "include": ["extensions/**/*.ts"]
+  "include": ["extensions/**/*.ts", "packages/**/*.ts"]
 }
