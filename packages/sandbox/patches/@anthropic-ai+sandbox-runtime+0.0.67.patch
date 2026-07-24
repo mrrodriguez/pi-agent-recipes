@@ -1,0 +1,15 @@
+diff --git a/node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/macos-sandbox-utils.js b/node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/macos-sandbox-utils.js
+index 1f9d2e2..329fefe 100644
+--- a/node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/macos-sandbox-utils.js
++++ b/node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/macos-sandbox-utils.js
+@@ -308,6 +308,10 @@ function generateSandboxProfile({ readConfig, writeConfig, httpProxyPort, socksP
+         '  (global-name "com.apple.coreservices.launchservicesd")',
+         ')',
+         '',
++        '; Fix Playwright Chromium within the pi-coding-agent Sandbox',
++        '(allow mach-register (global-name-regex #"^org\\.chromium\\."))',
++        '(allow mach-lookup (global-name-regex #"^org\\.chromium\\."))',
++        '',
+         ...(enableWeakerNetworkIsolation
+             ? [
+                 '; trustd.agent - needed for Go TLS certificate verification (weaker network isolation)',

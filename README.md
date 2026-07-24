@@ -109,6 +109,7 @@ Below are specific setup instructions for each extension.
    ```bash
    cd packages/sandbox && npm install
    ```
+   *Note: On macOS, this installation process automatically applies a `patch-package` patch to `@anthropic-ai/sandbox-runtime`. This patch injects `mach-lookup` and `mach-register` rules for `org.chromium.*` into the hardcoded Seatbelt profile to allow Chromium/Playwright Mach IPC mechanisms to function correctly inside the sandbox.*
 3. Create your safety policy file at `~/.pi/agent/sandbox.json` (see [packages/sandbox/README.md](packages/sandbox/README.md) for details).
 4. Run Pi with the `--no-sandbox` command-line flag to temporarily bypass isolation when needed.
 
