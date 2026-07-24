@@ -256,7 +256,11 @@ async function runWorker(args: {
       tools,
       messages: [],
     },
-    // The agent loop reads this to populate options.apiKey before calling
+    streamFn: (streamModel, streamContext, streamOptions) => {
+      const provider = ctx.modelRegistry.getProvider(streamModel.provider);
+      if (!provider) throw new Error(`Provider ${streamModel.provider} not found`);
+      return provider.streamSimple(streamModel, streamContext, streamOptions);
+    },
     // streamSimple. Without it, sub-agent HTTP calls have no x-api-key /
     // Authorization header.
     getApiKey: (provider) => ctx.modelRegistry.getApiKeyForProvider(provider),
