@@ -8,9 +8,9 @@ export default function (pi: ExtensionAPI) {
   }
 
   // Thresholds: Prefer environment variables, then fallback to Pi's architectural defaults or strict presets
-  const MAX_CHAR_LENGTH = Number(process.env.PI_SMART_TRUNC_MAX) || 50000;
-  const KEEP_HEAD_CHARS = Number(process.env.PI_SMART_TRUNC_HEAD) || 15000;
-  const KEEP_TAIL_CHARS = Number(process.env.PI_SMART_TRUNC_TAIL) || 15000;
+  const MAX_CHAR_LENGTH = Number(process.env.PI_SMART_TRUNC_MAX) || 100000;
+  const KEEP_HEAD_CHARS = Number(process.env.PI_SMART_TRUNC_HEAD) || 30000;
+  const KEEP_TAIL_CHARS = Number(process.env.PI_SMART_TRUNC_TAIL) || 30000;
 
   // Hook into tool results right after execution finishes
   pi.on("tool_result", async (event, ctx) => {
@@ -30,7 +30,7 @@ export default function (pi: ExtensionAPI) {
         // Construct the defensive sandwich payload
         part.text = [
           head,
-          `\n\n[... ⚠️ HARNESS SAFETY TRUNCATION: ${omittedCount.toLocaleString()} characters omitted from mid-section to prevent token bleed ...]\n\n`,
+          `\n\n[... ⚠️ HARNESS SAFETY TRUNCATION: ${omittedCount.toLocaleString()} characters omitted from mid-section to prevent token bleed. If this omitted section is needed, use targeted file reads with specific start/end lines to inspect it. ...]\n\n`,
           tail,
         ].join("");
 
