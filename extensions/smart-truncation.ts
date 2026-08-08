@@ -8,9 +8,9 @@ export default function (pi: ExtensionAPI) {
   }
 
   // Thresholds: Prefer environment variables, then fallback to Pi's architectural defaults or strict presets
-  const MAX_CHAR_LENGTH = Number(process.env.PI_SMART_TRUNC_MAX) || 15000;
-  const KEEP_HEAD_CHARS = Number(process.env.PI_SMART_TRUNC_HEAD) || 4000;
-  const KEEP_TAIL_CHARS = Number(process.env.PI_SMART_TRUNC_TAIL) || 4000;
+  const MAX_CHAR_LENGTH = Number(process.env.PI_SMART_TRUNC_MAX) || 50000;
+  const KEEP_HEAD_CHARS = Number(process.env.PI_SMART_TRUNC_HEAD) || 15000;
+  const KEEP_TAIL_CHARS = Number(process.env.PI_SMART_TRUNC_TAIL) || 15000;
 
   // Hook into tool results right after execution finishes
   pi.on("tool_result", async (event, ctx) => {
