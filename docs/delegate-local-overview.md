@@ -41,14 +41,15 @@ Registered via `pi.registerCommand`, the `/dm` command manages delegation state 
 - Disables delegation when `/dm off` is called (subsequent tool executions will return an error).
 
 ### 3. Dynamic Tool Registration
-The `delegate_to_local` tool is not registered at factory load. Instead, it is registered dynamically via `pi.registerTool` the first time a valid delegation model is enabled (either via the startup flag or `/dm`). 
+The `delegate_to_local` tool is not registered at factory load. Instead, it is registered dynamically via `pi.registerTool` the first time a valid delegation model is enabled (either via the startup flag or `/dm`).
 - This prevents the orchestrator from seeing the delegation tool when no local model is configured.
+- Registered with `exposure: "model-only"` so nested `ctx.executeTool()` calls cannot invoke `delegate_to_local` recursively.
 - Once registered, the tool remains in the orchestrator's schema, and toggling it off/on updates a runtime `delegationEnabled` flag rather than mutating the API schema.
 
-### 4. Sub-Agent Construction
+### 4. Sub-Agent Construction & Sandbox Inheritance
 When `delegate_to_local` executes, the extension constructs an isolated sub-`Agent`:
 - **API Keys**: Inherits provider credentials by supplying the `getApiKey` callback to query `ctx.modelRegistry.getApiKeyForProvider`. This ensures correct headers (e.g., `Authorization`) are populated for local or proxy endpoints.
-- **Tool Mapping**: Constructs the worker's toolset from the orchestrator's allowed list using Pi's built-in tool factories (e.g., `createReadTool`, `createEditTool`).
+- **Sandboxed Tool Proxying**: Selects the worker's allowed tool subset (`read`, `grep`, `find`, `ls`, `edit`, `write`, and opt-in `bash`) from `ctx.tools` and proxies every invocation through `ctx.executeTool()`. Every worker tool call runs through the parent session's full `tool_call` and `tool_result` pipeline (`protected-paths`, `scoped-access`, `permission-gate`, `smart-truncation`, and Seatbelt `packages/sandbox`).
 - **Parallel Execution**: Configures the sub-agent with `toolExecution: "parallel"` for faster execution.
 
 ### 5. Conditional Git Diffing

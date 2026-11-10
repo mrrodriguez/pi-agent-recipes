@@ -2,18 +2,33 @@
  * Scoped Access Extension
  *
  * Restricts file-related tools to the session's launch directory (CWD) by default.
- * Prompts the user when a tool attempts to access a path outside this scope.
+ * Prompts the user when a tool attempts to access a path outside this scope and
+ * bridges approved write scopes to the OS sandbox via `pi.events`.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 
+type ScopeMode = "read" | "write";
+
+type AccessDecision =
+	| { kind: "allow-session-write"; scope: string }
+	| { kind: "allow-session-read"; scope: string }
+	| { kind: "allow-write-once"; scope: string }
+	| { kind: "allow-read-once"; scope: string }
+	| { kind: "deny"; reason: string };
+
 export default function (pi: ExtensionAPI) {
 	const launchDir = process.cwd();
-	const allowedPaths = new Set<string>([launchDir]);
+	const readAllowedPaths = new Set<string>([launchDir]);
+	const writeAllowedPaths = new Set<string>([launchDir]);
 	const fileTools = ["write", "edit", "replace", "read", "ls", "grep", "find"];
+	const mutatingFileTools = new Set(["write", "edit", "replace"]);
 	const systemRoots = [
 		"Applications",
 		"Library",
@@ -35,7 +50,8 @@ export default function (pi: ExtensionAPI) {
 
 	// --- Helper Functions ---
 
-	const expandTilde = (p: string) => {
+	const expandTilde = (raw: string) => {
+		const p = raw.startsWith("@") ? raw.slice(1) : raw;
 		if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
 		return p === "~" ? os.homedir() : p;
 	};
@@ -51,13 +67,22 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	const isPathInScope = (targetPath: string) => {
+	const isPathUnderAny = (
+		targetPath: string,
+		scopes: ReadonlySet<string>,
+	): boolean => {
 		const absoluteTarget = path.resolve(launchDir, expandTilde(targetPath));
-		return Array.from(allowedPaths).some((allowed) => {
+		return Array.from(scopes).some((allowed) => {
 			const relative = path.relative(allowed, absoluteTarget);
 			return !relative.startsWith("..") && !path.isAbsolute(relative);
 		});
 	};
+
+	const isPathInReadScope = (targetPath: string) =>
+		isPathUnderAny(targetPath, readAllowedPaths);
+
+	const isPathInWriteScope = (targetPath: string) =>
+		isPathUnderAny(targetPath, writeAllowedPaths);
 
 	const isLikelyFileSystemPath = (p: string) => {
 		if (p.startsWith("//")) return false;
@@ -93,36 +118,67 @@ export default function (pi: ExtensionAPI) {
 				p.startsWith("/dev")
 			)
 				return false;
-			return !isPathInScope(p);
+			return !isPathInReadScope(p);
 		});
 	};
 
-	const promptForAccess = async (
-		ctx: any,
+	const grantDirectoryScope = (
+		targetScope: string,
+		mode: ScopeMode,
+		ctx: ExtensionContext,
+	) => {
+		readAllowedPaths.add(targetScope);
+		if (mode === "write") {
+			writeAllowedPaths.add(targetScope);
+			pi.events.emit("sandbox:allow-write", { path: targetScope });
+			ctx.ui.notify(`Added to scope (read-write): ${targetScope}`, "info");
+		} else {
+			if (targetScope !== launchDir && writeAllowedPaths.delete(targetScope)) {
+				pi.events.emit("sandbox:revoke-write", { path: targetScope });
+			}
+			ctx.ui.notify(`Added to scope (read-only): ${targetScope}`, "info");
+		}
+	};
+
+	const promptForScopeAccess = async (
+		ctx: ExtensionContext,
 		message: string,
 		choices: string[],
-		targetPath: string,
-	) => {
-		if (!ctx.hasUI)
+		targetScope: string,
+	): Promise<AccessDecision> => {
+		if (!ctx.hasUI) {
 			return {
-				block: true,
-				reason: `Path "${targetPath}" is outside session scope and no UI for confirmation.`,
+				kind: "deny",
+				reason: `Path "${targetScope}" is outside session scope and no UI for confirmation.`,
 			};
+		}
 
 		const choice = await ctx.ui.select(message, choices);
-
-		if (choice.toLowerCase().includes("allow directory")) {
-			const targetScope = getTargetScope(targetPath);
-			allowedPaths.add(targetScope);
-			ctx.ui.notify(`Added to scope: ${targetScope}`, "info");
-			return undefined;
+		if (!choice) {
+			return { kind: "deny", reason: "Access denied by user (out of scope)" };
 		}
 
-		if (choice.toLowerCase().startsWith("yes")) {
-			return undefined;
+		const lower = choice.toLowerCase();
+
+		if (lower.includes("allow directory read-write")) {
+			grantDirectoryScope(targetScope, "write", ctx);
+			return { kind: "allow-session-write", scope: targetScope };
 		}
 
-		return { block: true, reason: "Access denied by user (out of scope)" };
+		if (lower.includes("allow directory read-only")) {
+			grantDirectoryScope(targetScope, "read", ctx);
+			return { kind: "allow-session-read", scope: targetScope };
+		}
+
+		if (lower.includes("allow write")) {
+			return { kind: "allow-write-once", scope: targetScope };
+		}
+
+		if (lower.startsWith("yes")) {
+			return { kind: "allow-read-once", scope: targetScope };
+		}
+
+		return { kind: "deny", reason: "Access denied by user (out of scope)" };
 	};
 
 	// --- Event Handlers ---
@@ -142,13 +198,45 @@ export default function (pi: ExtensionAPI) {
 			)
 				return undefined;
 
-			if (!isPathInScope(targetPath)) {
-				return promptForAccess(
+			const isMutating = mutatingFileTools.has(event.toolName);
+			const inScope = isMutating
+				? isPathInWriteScope(targetPath)
+				: isPathInReadScope(targetPath);
+
+			if (!inScope) {
+				const targetScope = getTargetScope(targetPath);
+				const choices = isMutating
+					? [
+							"No",
+							"Yes (once, allow write)",
+							"Yes (allow directory read-write for session)",
+						]
+					: [
+							"No",
+							"Yes (once)",
+							"Yes (allow directory read-only for session)",
+							"Yes (allow directory read-write for session)",
+						];
+				const scopeLabel =
+					isMutating && isPathInReadScope(targetPath)
+						? "Write access to read-only session scope"
+						: "Access outside session scope";
+
+				const decision = await promptForScopeAccess(
 					ctx,
-					`⚠️ Access outside session scope:\n\n  Tool: ${event.toolName}\n  Path: ${targetPath}\n\nAllow?`,
-					["No", "Yes (once)", "Yes (allow directory for session)"],
-					targetPath,
+					`⚠️ ${scopeLabel}:\n\n  Tool: ${event.toolName}\n  Path: ${targetPath}\n\nAllow?`,
+					choices,
+					targetScope,
 				);
+				if (decision.kind === "deny") {
+					return { block: true, reason: decision.reason };
+				}
+				if (decision.kind === "allow-write-once") {
+					pi.events.emit("sandbox:allow-write-once", {
+						toolCallId: event.toolCallId,
+						paths: [decision.scope],
+					});
+				}
 			}
 		}
 
@@ -157,14 +245,50 @@ export default function (pi: ExtensionAPI) {
 			const command = event.input.command as string;
 			const suspectPaths = extractSuspectPathsFromCommand(command);
 
+			// Deduplicate out-of-scope references by resolved target directory so
+			// commands mentioning multiple files in the same directory prompt once.
+			const pathsByScope = new Map<string, string[]>();
 			for (const p of suspectPaths) {
-				const result = await promptForAccess(
+				if (isPathInReadScope(p)) continue;
+				const scope = getTargetScope(p);
+				const existing = pathsByScope.get(scope);
+				if (existing) {
+					if (!existing.includes(p)) existing.push(p);
+				} else {
+					pathsByScope.set(scope, [p]);
+				}
+			}
+
+			const approvedOnceScopes: string[] = [];
+
+			for (const [scope, matchedPaths] of pathsByScope) {
+				if (isPathInReadScope(scope)) continue;
+
+				const decision = await promptForScopeAccess(
 					ctx,
-					`⚠️ Bash command references path outside scope:\n\n  Command: ${command}\n  Suspect Path: ${p}\n\nAllow?`,
-					["No", "Yes", "Yes, and allow directory"],
-					p,
+					`⚠️ Bash command references path outside scope:\n\n  Command: ${command}\n  Scope: ${scope}\n  Matched: ${matchedPaths.join(", ")}\n\nAllow?`,
+					[
+						"No",
+						"Yes (once, read-only)",
+						"Yes (once, allow write)",
+						"Yes (allow directory read-only for session)",
+						"Yes (allow directory read-write for session)",
+					],
+					scope,
 				);
-				if (result?.block) return result;
+				if (decision.kind === "deny") {
+					return { block: true, reason: decision.reason };
+				}
+				if (decision.kind === "allow-write-once") {
+					approvedOnceScopes.push(decision.scope);
+				}
+			}
+
+			if (approvedOnceScopes.length > 0) {
+				pi.events.emit("sandbox:allow-write-once", {
+					toolCallId: event.toolCallId,
+					paths: approvedOnceScopes,
+				});
 			}
 		}
 
@@ -177,18 +301,80 @@ export default function (pi: ExtensionAPI) {
 		description: "Manage allowed directories for the current session",
 		handler: async (args, ctx) => {
 			const parts = args.trim().split(/\s+/);
-			const subCommand = parts[0].toLowerCase();
-			const target = parts.slice(1).join(" ");
+			const subCommand = (parts[0] ?? "").toLowerCase();
+			const rest = parts.slice(1);
 
-			if (subCommand === "add" && target) {
+			if ((subCommand === "add" || subCommand === "add-write") && rest.length > 0) {
+				const isReadFlag = rest[0] === "--read" || rest[0] === "-r";
+				const target = (isReadFlag ? rest.slice(1) : rest).join(" ");
+				if (!target) {
+					ctx.ui.notify(
+						"Usage: /scope [add [--read] <path> | add-read <path> | remove <path> | list]",
+						"warning",
+					);
+					return;
+				}
 				const targetScope = getTargetScope(target);
-				allowedPaths.add(targetScope);
-				ctx.ui.notify(`Added to scope: ${targetScope}`, "info");
+				if (isReadFlag && targetScope === launchDir) {
+					ctx.ui.notify(
+						`Launch directory is always read-write: ${launchDir}`,
+						"warning",
+					);
+					return;
+				}
+				grantDirectoryScope(targetScope, isReadFlag ? "read" : "write", ctx);
+			} else if (subCommand === "add-read" && rest.length > 0) {
+				const target = rest.join(" ");
+				const targetScope = getTargetScope(target);
+				if (targetScope === launchDir) {
+					ctx.ui.notify(
+						`Launch directory is always read-write: ${launchDir}`,
+						"warning",
+					);
+					return;
+				}
+				grantDirectoryScope(targetScope, "read", ctx);
+			} else if ((subCommand === "remove" || subCommand === "rm") && rest.length > 0) {
+				const target = rest.join(" ");
+				const resolvedTarget = path.resolve(launchDir, expandTilde(target));
+				const targetScope = readAllowedPaths.has(resolvedTarget)
+					? resolvedTarget
+					: getTargetScope(target);
+
+				if (targetScope === launchDir) {
+					ctx.ui.notify(
+						`Cannot remove launch directory from scope: ${launchDir}`,
+						"warning",
+					);
+					return;
+				}
+				if (!readAllowedPaths.has(targetScope)) {
+					ctx.ui.notify(
+						`Path is not in active scope: ${targetScope}`,
+						"warning",
+					);
+					return;
+				}
+
+				readAllowedPaths.delete(targetScope);
+				if (writeAllowedPaths.delete(targetScope)) {
+					pi.events.emit("sandbox:revoke-write", { path: targetScope });
+				}
+				ctx.ui.notify(`Removed from scope: ${targetScope}`, "info");
 			} else if (subCommand === "list") {
-				const list = Array.from(allowedPaths).sort().join("\n  - ");
+				const list = Array.from(readAllowedPaths)
+					.sort()
+					.map((p) => {
+						const mode = writeAllowedPaths.has(p) ? "read-write" : "read-only";
+						return `${p} (${mode})`;
+					})
+					.join("\n  - ");
 				ctx.ui.notify(`Allowed scopes:\n  - ${list}`, "info");
 			} else {
-				ctx.ui.notify("Usage: /scope [add <path> | list]", "warning");
+				ctx.ui.notify(
+					"Usage: /scope [add [--read] <path> | add-read <path> | remove <path> | list]",
+					"warning",
+				);
 			}
 		},
 	});
