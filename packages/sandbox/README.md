@@ -4,20 +4,19 @@ This package provides OS-level container isolation for the Pi coding agent. It r
 
 ## Features
 
-- **Unified Mutation Interceptor**: Unlike simple wrappers that only sandbox standard `bash` tool calls, this extension listens to the `tool_call` event and mutates the command arguments before they run. This secures context-mode execution tools (`ctx_execute` and `ctx_execute_file` when the language is `"shell"`) as well.
+- **Unified Mutation & Policy Interceptor**: Listens to the `tool_call` event to wrap `bash` commands in Seatbelt/Bubblewrap AND enforce the same `sandbox.json` filesystem rules (`denyRead`, `denyWrite`, `allowWrite`) on built-in non-shell file tools (`read`, `ls`, `grep`, `find`, `write`, `edit`, `replace`), composing cleanly with upstream pre-flight extensions.
 - **Dynamic Configuration**: Loads and merges a global policy file (`~/.pi/agent/sandbox.json`) with optional project-local overrides (`<cwd>/.pi/sandbox.json`).
+- **Live Scoped Write Expansion (`pi.events`)**: Listens to `sandbox:allow-write`, `sandbox:revoke-write`, and `sandbox:allow-write-once` events emitted by `scoped-access.ts` so cross-repo write approvals update `SandboxManager` live without restarting Pi.
 - **Safety Flags & Commands**:
   - Run `pi --no-sandbox` to temporarily run without container isolation.
-  - Run `/sandbox` within a session to print the active sandbox policy rules.
+  - Run `/sandbox` within a session to print the active base and session-scoped sandbox policy rules.
 
 ## Setup & Configuration
 
 1. Register the absolute path of this package directory at the **end** of the `packages` list in your global `~/.pi/agent/settings.json` file. This ensures it executes after pre-flight safety checks (which need to read human-readable command strings):
    ```json
    {
-     "packages": [
-       "/path/to/pi-agent-recipes/packages/sandbox"
-     ]
+     "packages": ["/path/to/pi-agent-recipes/packages/sandbox"]
    }
    ```
 2. Navigate to this directory and run:
@@ -53,17 +52,23 @@ Here is a recommended configuration template:
     "denyRead": [
       "~/.ssh",
       "~/.aws",
-      "~/.gnupg"
+      "~/.gnupg",
+      "~/.pi/agent/auth.json",
+      "~/Library/Keychains"
     ],
-    "allowWrite": [
-      ".",
-      "/tmp"
-    ],
+    "allowWrite": [".", "/tmp"],
     "denyWrite": [
       ".env",
-      ".env.*",
-      "*.pem",
-      "*.key"
+      "/**/.env",
+      "/**/.env.*",
+      "/**/*.pem",
+      "/**/*.key",
+      "~/.pi/agent/auth.json",
+      "~/.pi/agent/models.json",
+      "~/.pi/agent/settings.json",
+      "~/.pi/agent/sandbox.json",
+      "~/.pi/agent/mcp.json",
+      "~/.pi/agent/extensions"
     ]
   }
 }
@@ -72,5 +77,6 @@ Here is a recommended configuration template:
 ## Security Strategy & Architecture
 
 To avoid command wrapping conflicts (e.g. if the sandbox wraps a command, subsequent extensions like `scoped-access` or `permission-gate` would see the compiled sandbox invocation rather than the raw shell command), ensure your extensions are loaded first:
+
 - Auto-discovered extensions inside `~/.pi/agent/extensions/` run first.
 - Explicit `packages` (in `settings.json`) run last. Keeping the sandbox in a package guarantees clean pre-flight inspections before final kernel-level execution.

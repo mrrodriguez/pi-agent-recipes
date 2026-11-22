@@ -8,8 +8,8 @@ export default function (pi: ExtensionAPI) {
     return;
   }
 
-  // Thresholds: Strict (4) vs Standard (16)
-  const SILENT_TURN_THRESHOLD = Number(process.env.PI_SILENT_TURN_LIMIT) || 16;
+  // Thresholds: Strict (4) vs Standard (30)
+  const SILENT_TURN_THRESHOLD = Number(process.env.PI_SILENT_TURN_LIMIT) || 30;
   let silentTurnCount = 0;
 
   console.log(

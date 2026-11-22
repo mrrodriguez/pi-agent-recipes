@@ -3,9 +3,6 @@
  *
  * Provides a "Soft" safety layer with confirmation prompts for destructive
  * operations. Complements "Hard" OS-level sandboxing.
- *
- * This version is "context-mode aware": it monitors both standard bash
- * and context-mode execution tools (ctx_execute, ctx_execute_file).
  */
 
 import {
@@ -16,11 +13,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 // ── Types ───────────────────────────────────────────────────────────────────
-
-interface ContextModeInput extends Record<string, unknown> {
-	code: string;
-	language?: string;
-}
 
 interface GenericFileInput extends Record<string, unknown> {
 	path: string;
@@ -43,16 +35,10 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Utilities ─────────────────────────────────────────────────────────────
 
-	/** Extracts a command string from various shell-like tools */
+	/** Extracts a command string from shell tools */
 	function getShellCommand(event: ToolCallEvent): { command: string; tool: string } | null {
 		if (isToolCallEventType("bash", event)) {
 			return { command: event.input.command, tool: "bash" };
-		}
-		if (isToolCallEventType<"ctx_execute", ContextModeInput>("ctx_execute", event)) {
-			return { command: event.input.code, tool: "ctx_execute" };
-		}
-		if (isToolCallEventType<"ctx_execute_file", ContextModeInput>("ctx_execute_file", event)) {
-			return { command: event.input.code, tool: "ctx_execute_file" };
 		}
 		return null;
 	}
@@ -140,7 +126,7 @@ export default function (pi: ExtensionAPI) {
 				`Permission Gate Status:\n` +
 					`- File Edits: ${status}\n` +
 					`- Shell Tools: ${ctx.ui.theme.fg("warning", "ALWAYS GATED")}\n` +
-					`- Monitored: bash, ctx_execute, ctx_execute_file, ${FILE_TOOLS.join(", ")}`,
+					`- Monitored: bash, ${FILE_TOOLS.join(", ")}`,
 				"info",
 			);
 		},

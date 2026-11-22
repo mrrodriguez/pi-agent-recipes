@@ -1,14 +1,14 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-  createBashTool,
-  createEditTool,
-  createFindTool,
-  createGrepTool,
-  createLsTool,
-  createReadTool,
-  createWriteTool,
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type {
+  AgentMessage,
+  AgentTool,
+  AgentToolCall,
+  ThinkingLevel,
+} from "@earendil-works/pi-agent-core";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { spawnSync } from "node:child_process";
@@ -60,6 +60,16 @@ const ALLOWED_TOOLS_DEFAULT = [
   "write",
 ] as const;
 
+const SUPPORTED_WORKER_TOOLS: ReadonlySet<string> = new Set([
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "bash",
+  "edit",
+  "write",
+]);
+
 // Tools that can plausibly modify the working tree. If the worker used none of
 // these, capturing a git diff is noise — it would just surface whatever the
 // user already had uncommitted, with no causal relationship to this delegation.
@@ -99,17 +109,33 @@ interface GitState {
 // Pure helpers — no closure state, no side effects beyond the noted shellouts
 // ---------------------------------------------------------------------------
 
-function buildToolSet(cwd: string, allowed: readonly string[]): AgentTool<any>[] {
-  const requested = new Set(allowed);
-  const tools: AgentTool<any>[] = [];
-  if (requested.has("read")) tools.push(createReadTool(cwd));
-  if (requested.has("grep")) tools.push(createGrepTool(cwd));
-  if (requested.has("find")) tools.push(createFindTool(cwd));
-  if (requested.has("ls")) tools.push(createLsTool(cwd));
-  if (requested.has("bash")) tools.push(createBashTool(cwd));
-  if (requested.has("edit")) tools.push(createEditTool(cwd));
-  if (requested.has("write")) tools.push(createWriteTool(cwd));
-  return tools;
+/**
+ * Build worker tools as proxies over `ctx.tools` executing via `ctx.executeTool()`.
+ * Every call made by the local worker flows through the parent session's `tool_call`
+ * and `tool_result` hooks (protected-paths, scoped-access, permission-gate,
+ * smart-truncation, and OS Seatbelt sandboxing).
+ */
+function buildToolSet(
+  ctx: ExtensionToolContext,
+  allowed: readonly string[],
+): AgentTool<any>[] {
+  const requested = new Set(
+    allowed.filter((name) => SUPPORTED_WORKER_TOOLS.has(name)),
+  );
+  return ctx.tools
+    .filter((tool) => requested.has(tool.name))
+    .map((tool) => ({
+      ...tool,
+      execute: async (_toolCallId, params, signal, onUpdate) => {
+        const outcome = await ctx.executeTool(tool.name, params, {
+          signal,
+          onUpdate,
+        });
+        return outcome.isError
+          ? { ...outcome.result, isError: true }
+          : outcome.result;
+      },
+    }));
 }
 
 function captureGitState(cwd: string): GitState {
@@ -140,13 +166,15 @@ function summarizeToolCalls(messages: AgentMessage[]): {
   toolCallNames: string[];
 } {
   const raw = messages.flatMap((m) =>
-    m.role === "assistant" ? m.content.filter((c) => c.type === "toolCall") : [],
+    m.role === "assistant"
+      ? m.content.filter((c): c is AgentToolCall => c.type === "toolCall")
+      : [],
   );
   return {
     toolCalls: raw.map(
-      (c: any) => `- ${c.name}(${JSON.stringify(c.arguments).slice(0, 120)})`,
+      (c) => `- ${c.name}(${JSON.stringify(c.arguments).slice(0, 120)})`,
     ),
-    toolCallNames: raw.map((c: any) => c.name as string),
+    toolCallNames: raw.map((c) => c.name),
   };
 }
 
@@ -239,20 +267,22 @@ function errorResult(text: string, errorTag: string, extra?: Record<string, unkn
  */
 async function runWorker(args: {
   model: ResolvedModel;
-  ctx: ExtensionContext;
+  ctx: ExtensionToolContext;
   params: DelegateParams;
   signal: AbortSignal | undefined;
 }): Promise<WorkerOutput> {
   const { model, ctx, params, signal } = args;
 
   const allowed = params.allowed_tools ?? (ALLOWED_TOOLS_DEFAULT as readonly string[]);
-  const tools = buildToolSet(ctx.cwd, allowed);
+  const tools = buildToolSet(ctx, allowed);
+
+  const thinkingLevel: ThinkingLevel = params.thinking_level ?? "low";
 
   const worker = new Agent({
     initialState: {
       systemPrompt: DELEGATE_SYSTEM,
       model,
-      thinkingLevel: (params.thinking_level as any) ?? "low",
+      thinkingLevel,
       tools,
       messages: [],
     },
@@ -321,6 +351,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerTool({
       name: "delegate_to_local",
       label: "Delegate (local LLM)",
+      exposure: "model-only",
       description: [
         "Hand a self-contained mechanical coding task to a fast local model that runs",
         "on this machine. Use this to save context window tokens and to parallelize work",

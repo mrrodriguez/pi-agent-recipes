@@ -4,18 +4,13 @@ import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
 export default function (pi: ExtensionAPI) {
   // Only enable if strict cost protections are requested via environment variable
   if (!process.env.PI_STRICT_COST_PROTECTIONS) {
-    console.log(`[Smart Truncation] Disabled`);
     return;
   }
 
   // Thresholds: Prefer environment variables, then fallback to Pi's architectural defaults or strict presets
-  const MAX_CHAR_LENGTH = Number(process.env.PI_SMART_TRUNC_MAX) || 15000;
-  const KEEP_HEAD_CHARS = Number(process.env.PI_SMART_TRUNC_HEAD) || 4000;
-  const KEEP_TAIL_CHARS = Number(process.env.PI_SMART_TRUNC_TAIL) || 4000;
-
-  console.log(
-    `[Smart Truncation] Enabled (Trigger: ${MAX_CHAR_LENGTH}, Head: ${KEEP_HEAD_CHARS}, Tail: ${KEEP_TAIL_CHARS}, PiDefault: ${DEFAULT_MAX_BYTES})`,
-  );
+  const MAX_CHAR_LENGTH = Number(process.env.PI_SMART_TRUNC_MAX) || 100000;
+  const KEEP_HEAD_CHARS = Number(process.env.PI_SMART_TRUNC_HEAD) || 30000;
+  const KEEP_TAIL_CHARS = Number(process.env.PI_SMART_TRUNC_TAIL) || 30000;
 
   // Hook into tool results right after execution finishes
   pi.on("tool_result", async (event, ctx) => {
@@ -35,7 +30,7 @@ export default function (pi: ExtensionAPI) {
         // Construct the defensive sandwich payload
         part.text = [
           head,
-          `\n\n[... ⚠️ HARNESS SAFETY TRUNCATION: ${omittedCount.toLocaleString()} characters omitted from mid-section to prevent token bleed ...]\n\n`,
+          `\n\n[... ⚠️ HARNESS SAFETY TRUNCATION: ${omittedCount.toLocaleString()} characters omitted from mid-section to prevent token bleed. If this omitted section is needed, use targeted file reads with specific start/end lines to inspect it. ...]\n\n`,
           tail,
         ].join("");
 
@@ -43,8 +38,6 @@ export default function (pi: ExtensionAPI) {
         totalOmitted += omittedCount;
       }
     }
-
-    console.log(`[Smart Truncation] in progress with ${truncatedCount}`);
 
     if (truncatedCount > 0) {
       // Provide visual feedback in Pi's terminal window
